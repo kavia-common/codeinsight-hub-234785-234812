@@ -8,7 +8,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
-from src.api.schemas import AnalyticsDailyOrgOut, AuditOut, OrgOut, PullRequestOut, RepoOut, UpdateUserRoleRequest, UserOut
+from datetime import datetime, timedelta, timezone
+
+from src.api.schemas import (
+    AnalyticsDailyOrgOut,
+    AuditOut,
+    BillingStateOut,
+    OrgOut,
+    PullRequestOut,
+    RepoOut,
+    UpdateUserRoleRequest,
+    UserOut,
+)
 from src.core.audit import write_audit_log
 from src.core.auth import AuthContext, get_auth_context
 from src.core.db import get_db
@@ -40,7 +51,7 @@ def list_orgs(ctx: AuthContext = Depends(get_auth_context), db: Session = Depend
         .order_by(Organization.name.asc())
         .all()
     )
-    return [OrgOut(id=o.id, slug=o.slug, name=o.name) for o in rows]
+    return [OrgOut(id=str(o.id), name=o.name) for o in rows]
 
 
 @router.get(
@@ -55,7 +66,21 @@ def list_repos(
 ) -> list[RepoOut]:
     """List repos for org."""
     repos = db.query(Repository).filter(Repository.org_id == org_id, Repository.is_active.is_(True)).all()
-    return [RepoOut(id=r.id, org_id=r.org_id, provider=r.provider, full_name=r.full_name, is_active=r.is_active) for r in repos]
+
+    def _short_name(full_name: str) -> str:
+        # "org/repo" -> "repo"
+        return (full_name.split("/", 1)[1] if "/" in full_name else full_name) or full_name
+
+    return [
+        RepoOut(
+            id=str(r.id),
+            name=_short_name(r.full_name),
+            fullName=r.full_name,
+            provider=r.provider,
+            isSynced=bool(r.is_active),
+        )
+        for r in repos
+    ]
 
 
 @router.get(
@@ -78,15 +103,26 @@ def list_prs(
         q = q.filter(PullRequest.provider == provider)
     q = q.order_by(PullRequest.created_at.desc().nullslast()).limit(200)
     prs = q.all()
+
+    # Best-effort map: include repo full name for UI without requiring extra joins.
+    repo_ids = {p.repo_id for p in prs if p.repo_id}
+    repo_map: dict[uuid.UUID, str] = {}
+    if repo_ids:
+        repos = db.query(Repository).filter(Repository.id.in_(list(repo_ids))).all()
+        repo_map = {r.id: r.full_name for r in repos}
+
     return [
         PullRequestOut(
-            id=p.id,
-            repo_id=p.repo_id,
-            provider=p.provider,
+            id=str(p.id),
+            number=p.number or p.iid,
             title=p.title,
-            state=p.state,
-            url=p.url,
-            created_at=p.created_at,
+            author=p.author_username,
+            createdAt=p.created_at,
+            provider=p.provider,
+            repoFullName=repo_map.get(p.repo_id),
+            summary=None,
+            riskScore=None,
+            riskNotes=[],
         )
         for p in prs
     ]
@@ -107,14 +143,20 @@ def get_pr(
     pr = db.get(PullRequest, pr_id)
     if not pr or pr.org_id != org_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    repo = db.get(Repository, pr.repo_id) if pr.repo_id else None
+
     return PullRequestOut(
-        id=pr.id,
-        repo_id=pr.repo_id,
-        provider=pr.provider,
+        id=str(pr.id),
+        number=pr.number or pr.iid,
         title=pr.title,
-        state=pr.state,
-        url=pr.url,
-        created_at=pr.created_at,
+        author=pr.author_username,
+        createdAt=pr.created_at,
+        provider=pr.provider,
+        repoFullName=repo.full_name if repo else None,
+        summary=None,
+        riskScore=None,
+        riskNotes=[],
     )
 
 
@@ -138,12 +180,12 @@ def list_audit(
     )
     return [
         AuditOut(
-            id=e.id,
-            created_at=e.created_at,
+            id=str(e.id),
+            ts=e.created_at,
+            actor=str(e.actor_user_id) if e.actor_user_id else None,
             action=e.action,
-            entity_type=e.entity_type,
-            entity_id=e.entity_id,
-            metadata=e.metadata or {},
+            target=e.entity_type,
+            meta=(e.metadata.get("provider") if isinstance(e.metadata, dict) else None),
         )
         for e in events
     ]
@@ -195,14 +237,30 @@ def list_users(
     db: Session = Depends(get_db),
 ) -> list[UserOut]:
     """List users for org admin page."""
-    users = (
-        db.query(User)
+    rows = (
+        db.query(User, OrgMembership)
         .join(OrgMembership, OrgMembership.user_id == User.id)
         .filter(OrgMembership.org_id == org_id)
         .order_by(User.created_at.desc())
         .all()
     )
-    return [UserOut(id=u.id, email=u.email, display_name=u.display_name, avatar_url=u.avatar_url) for u in users]
+
+    # For the happy-path demo flow, we don't fully materialize roles; the UI mainly needs shape.
+    # We map status from membership; role is a best-effort placeholder.
+    out: list[UserOut] = []
+    for user, membership in rows:
+        out.append(
+            UserOut(
+                id=str(user.id),
+                email=user.email,
+                name=user.display_name,
+                display_name=user.display_name,
+                avatar_url=user.avatar_url,
+                role="member",
+                status=membership.status,
+            )
+        )
+    return out
 
 
 @router.patch(
@@ -239,3 +297,22 @@ def update_user_role(
         metadata={"new_role": payload.role, "by": str(ctx.user.id)},
     )
     return {"ok": True}
+
+
+@router.get(
+    "/{org_id}/billing",
+    summary="Get billing state (demo)",
+    response_model=BillingStateOut,
+)
+def get_billing(
+    org_id: uuid.UUID,
+    _: AuthContext = Depends(require_permission("org:read")),
+) -> BillingStateOut:
+    """Return a deterministic billing payload for the UI happy-path demo flow."""
+    now = datetime.now(timezone.utc)
+    return BillingStateOut(
+        plan="pro",
+        seatsUsed=7,
+        seatsLimit=10,
+        renewalDate=now + timedelta(days=12),
+    )

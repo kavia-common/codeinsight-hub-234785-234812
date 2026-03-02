@@ -29,6 +29,7 @@ class Settings:
 
     cookie_secure: bool
     cookie_samesite: str
+    cookie_domain: Optional[str]
 
     site_url: str
 
@@ -67,6 +68,10 @@ def get_settings() -> Settings:
             )
         return val
 
+    cookie_domain = os.getenv("COOKIE_DOMAIN")
+    if cookie_domain:
+        cookie_domain = cookie_domain.strip() or None
+
     _CACHED = Settings(
         postgres_url=_req("POSTGRES_URL"),
         postgres_user=_req("POSTGRES_USER"),
@@ -81,6 +86,7 @@ def get_settings() -> Settings:
         refresh_token_ttl_days=int(os.getenv("REFRESH_TOKEN_TTL_DAYS", "30")),
         cookie_secure=os.getenv("COOKIE_SECURE", "true").lower() in ("1", "true", "yes"),
         cookie_samesite=os.getenv("COOKIE_SAMESITE", "lax"),
+        cookie_domain=cookie_domain,
         site_url=os.getenv("SITE_URL", "http://localhost:3000").rstrip("/"),
         github_client_id=os.getenv("GITHUB_CLIENT_ID"),
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),

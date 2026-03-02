@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,46 +12,55 @@ class HealthResponse(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: uuid.UUID
+    id: str = Field(..., description="User id as string (UUID).")
     email: Optional[str] = None
-    display_name: Optional[str] = None
+    name: Optional[str] = Field(default=None, description="Display name (frontend expects `name`).")
+    display_name: Optional[str] = Field(default=None, description="Back-compat field (same as name).")
     avatar_url: Optional[str] = None
+    role: Optional[str] = Field(default=None, description="Optional org role label for UI surfaces.")
+    status: Optional[str] = Field(default=None, description="Membership status (active/invited), if applicable.")
 
 
 class OrgOut(BaseModel):
-    id: uuid.UUID
-    slug: str
-    name: str
+    id: str = Field(..., description="Organization id as string (UUID).")
+    name: str = Field(..., description="Organization display name (frontend expects `name`).")
 
 
 class RepoOut(BaseModel):
-    id: uuid.UUID
-    org_id: uuid.UUID
+    id: str = Field(..., description="Repository id as string (UUID).")
+    name: str = Field(..., description="Short repo name derived from full name.")
+    fullName: str = Field(..., description="Provider full name (e.g. org/repo).")
     provider: str
-    full_name: str
-    is_active: bool = True
+    isSynced: bool = Field(..., description="Whether repo is synced/enabled (maps to is_active).")
 
 
 class PullRequestOut(BaseModel):
-    id: uuid.UUID
-    repo_id: uuid.UUID
-    provider: str
+    id: str = Field(..., description="PR id as string (UUID).")
+    number: Optional[int] = Field(default=None, description="Provider PR number, when available.")
     title: str
-    state: str
-    url: Optional[str] = None
-    created_at: Optional[datetime] = None
-    risk_score: Optional[float] = None
+    author: Optional[str] = Field(default=None, description="Author username, when known.")
+    createdAt: Optional[datetime] = Field(default=None, description="Creation timestamp (frontend expects `createdAt`).")
+    provider: str
+    repoFullName: Optional[str] = Field(default=None, description="Repo full name for UI lists.")
     summary: Optional[str] = None
-    risk_notes: list[str] = Field(default_factory=list)
+    riskScore: Optional[float] = None
+    riskNotes: list[str] = Field(default_factory=list)
 
 
 class AuditOut(BaseModel):
-    id: uuid.UUID
-    created_at: datetime
+    id: str = Field(..., description="Audit event id as string (UUID).")
+    ts: datetime = Field(..., description="Event timestamp (frontend expects `ts`).")
+    actor: Optional[str] = Field(default=None, description="Actor identifier (best-effort).")
     action: str
-    entity_type: Optional[str] = None
-    entity_id: Optional[uuid.UUID] = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    target: Optional[str] = Field(default=None, description="Entity target display (best-effort).")
+    meta: Optional[str] = Field(default=None, description="Short metadata string for display (best-effort).")
+
+
+class BillingStateOut(BaseModel):
+    plan: str = Field(..., description="Plan key (e.g. free/pro).")
+    seatsUsed: int = Field(..., description="Current seats used.")
+    seatsLimit: int = Field(..., description="Seat limit for plan.")
+    renewalDate: datetime = Field(..., description="Renewal date/time.")
 
 
 class OAuthStartResponse(BaseModel):
@@ -64,7 +73,7 @@ class OAuthCallbackResponse(BaseModel):
 
 class SessionMeResponse(BaseModel):
     user: UserOut
-    active_org_id: Optional[uuid.UUID] = None
+    active_org_id: Optional[str] = None
 
 
 class SetActiveOrgRequest(BaseModel):

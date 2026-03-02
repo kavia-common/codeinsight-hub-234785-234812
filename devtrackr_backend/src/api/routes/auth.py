@@ -14,12 +14,17 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 def _cookie_params() -> dict:
     settings = get_settings()
-    return {
+    params = {
         "httponly": True,
         "secure": settings.cookie_secure,
         "samesite": settings.cookie_samesite,
         "path": "/",
     }
+    # Allow deployments to share cookies across subdomains when needed.
+    # Keep unset by default for localhost / simple preview URLs.
+    if settings.cookie_domain:
+        params["domain"] = settings.cookie_domain
+    return params
 
 
 @router.get(
@@ -30,8 +35,14 @@ def _cookie_params() -> dict:
 def me(ctx: AuthContext = Depends(get_auth_context)) -> SessionMeResponse:
     """Return current session user and active organization."""
     return SessionMeResponse(
-        user=UserOut(id=ctx.user.id, email=ctx.user.email, display_name=ctx.user.display_name, avatar_url=ctx.user.avatar_url),
-        active_org_id=ctx.active_org_id,
+        user=UserOut(
+            id=str(ctx.user.id),
+            email=ctx.user.email,
+            name=ctx.user.display_name,
+            display_name=ctx.user.display_name,
+            avatar_url=ctx.user.avatar_url,
+        ),
+        active_org_id=str(ctx.active_org_id) if ctx.active_org_id else None,
     )
 
 

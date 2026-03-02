@@ -20,12 +20,17 @@ router = APIRouter(prefix="/oauth", tags=["OAuth"])
 
 def _cookie_params() -> dict:
     settings = get_settings()
-    return {
+    params = {
         "httponly": True,
         "secure": settings.cookie_secure,
         "samesite": settings.cookie_samesite,
         "path": "/",
     }
+    # Allow deployments to share cookies across subdomains when needed.
+    # Keep unset by default for localhost / simple preview URLs.
+    if settings.cookie_domain:
+        params["domain"] = settings.cookie_domain
+    return params
 
 
 def _redirect_uri(provider: str) -> str:
