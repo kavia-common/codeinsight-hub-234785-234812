@@ -1,0 +1,4 @@
+{
+    "command": "pytest",
+    "working_directory": "/home/kavia/workspace/code-generation/codeinsight-hub-234785-234812/devtrackr_backend"
+}
